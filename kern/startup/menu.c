@@ -523,12 +523,13 @@ cmd_mainmenu(int n, char **a)
 }
 
 static
-void
+int
 cmd_dth(int nargs, char **args)
 {
 	(void)nargs;
 	(void)args;
 	dbflags = DB_THREADS;
+	return 0;
 }
 
 ////////////////////////////////////////
