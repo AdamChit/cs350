@@ -54,6 +54,7 @@
 
 #define MAXMENUARGS  16
 
+
 // XXX this should not be in this file
 void
 getinterval(time_t s1, uint32_t ns1, time_t s2, uint32_t ns2,
@@ -506,6 +507,7 @@ static const char *mainmenu[] = {
 #endif
 	"[kh] Kernel heap stats              ",
 	"[q] Quit and shut down              ",
+	"[dth] enabled debugging messages    ",
 	NULL
 };
 
@@ -549,6 +551,7 @@ static struct {
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
 	{ "halt",	cmd_quit },
+	{ "dth",	cmd_dth },
 
 #if OPT_SYNCHPROBS
 	/* in-kernel synchronization problem(s) */
@@ -710,4 +713,13 @@ menu(char *args)
 		kgets(buf, sizeof(buf));
 		menu_execute(buf, 0);
 	}
+}
+
+static
+void
+cmd_dth(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+	dbflags = DB_THREADS;
 }
