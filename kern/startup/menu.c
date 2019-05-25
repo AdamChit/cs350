@@ -522,6 +522,16 @@ cmd_mainmenu(int n, char **a)
 	return 0;
 }
 
+static
+int
+cmd_dth(int nargs, char **args)
+{
+	(void)nargs;
+	(void)args;
+	dbflags = DB_THREADS;
+	return 0;
+}
+
 ////////////////////////////////////////
 //
 // Command table.
@@ -713,14 +723,5 @@ menu(char *args)
 		kgets(buf, sizeof(buf));
 		menu_execute(buf, 0);
 	}
-}
-
-static
-void
-cmd_dth(int nargs, char **args)
-{
-	(void)nargs;
-	(void)args;
-	dbflags = DB_THREADS;
 }
 
