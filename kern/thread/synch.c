@@ -164,7 +164,17 @@ lock_create(const char *name)
         }
         
         // add stuff here as needed
-        
+        lock->lock_wchan = wchan_create(lock->lk_name);
+	if (lock->lock_wchan == NULL) {
+		kfree(lock->lk_name);
+		kfree(lock);
+		return NULL;
+	}
+
+	spinlock_init(&lock->spin_lock);
+
+        lock->held = false;
+        lock->owner = NULL;
         return lock;
 }
 
@@ -172,37 +182,63 @@ void
 lock_destroy(struct lock *lock)
 {
         KASSERT(lock != NULL);
-
+        KASSERT(lock->owner == NULL);
         // add stuff here as needed
-        
+        /* wchan_cleanup will assert if anyone's waiting on it */
+	spinlock_cleanup(&lock->spin_lock);
+	wchan_destroy(lock->lock_wchan);
+
         kfree(lock->lk_name);
+        kfree(lock->owner);
+        kfree(lock->held);
         kfree(lock);
 }
 
 void
 lock_acquire(struct lock *lock)
 {
-        // Write this
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(&lock));
 
-        (void)lock;  // suppress warning until code gets written
+        // why do we need to do &lock
+	spinlock_acquire(&lock->spin_lock);
+
+        while (lock->held) {
+		wchan_lock(lock->lock_wchan);
+		spinlock_release(&lock->spin_lock);
+                wchan_sleep(lock->lock_wchan);
+		spinlock_acquire(&lock->spin_lock);
+        }
+        // not sure what to replace this with    KASSERT(sem->sem_count > 0);
+        lock->held = true;
+        lock->owner = curthread;
+
+	spinlock_release(&lock->spin_lock);
 }
 
 void
 lock_release(struct lock *lock)
 {
-        // Write this
+        KASSERT(lock != NULL);
+        KASSERT(lock_do_i_hold(&lock))
 
-        (void)lock;  // suppress warning until code gets written
+	spinlock_acquire(&lock->spin_lock);
+
+        lock->held = false;
+        lock->owner = NULL;
+	wchan_wakeone(lock->lock_wchan);
+
+	spinlock_release(&lock->spin_lock);
 }
 
+/* 
+checks if current thread is pointing to the same location in memory as the 
+owner of the lock
+*/
 bool
 lock_do_i_hold(struct lock *lock)
 {
-        // Write this
-
-        (void)lock;  // suppress warning until code gets written
-
-        return true; // dummy until code gets written
+        return lock->owner == curthread;
 }
 
 ////////////////////////////////////////////////////////////
