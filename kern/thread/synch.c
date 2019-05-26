@@ -190,7 +190,7 @@ lock_destroy(struct lock *lock)
 
         kfree(lock->lk_name);
         kfree(lock->owner);
-        kfree(lock->held);
+        //kfree(lock->held);
         kfree(lock);
 }
 
@@ -198,7 +198,7 @@ void
 lock_acquire(struct lock *lock)
 {
         KASSERT(lock != NULL);
-        KASSERT(lock_do_i_hold(&lock));
+        KASSERT(!lock_do_i_hold(lock));
 
         // why do we need to do &lock
 	spinlock_acquire(&lock->spin_lock);
@@ -220,7 +220,7 @@ void
 lock_release(struct lock *lock)
 {
         KASSERT(lock != NULL);
-        KASSERT(lock_do_i_hold(&lock))
+        KASSERT(lock_do_i_hold(lock));
 
 	spinlock_acquire(&lock->spin_lock);
 
