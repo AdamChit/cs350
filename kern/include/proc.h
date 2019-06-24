@@ -66,6 +66,13 @@ struct proc {
      system calls, since each process will need to keep track of all files
      it has opened, not just the console. */
   struct vnode *console;                /* a vnode for the console device */
+  struct lock *proc_lock;
+  struct array *childern;
+  struct proc *parent;
+  struct cv *proc_cv;
+  bool dead;
+  int exit_code;
+  pid_t PID;
 #endif
 
 	/* add more material here as needed */
@@ -77,6 +84,9 @@ extern struct proc *kproc;
 /* Semaphore used to signal when there are no more processes */
 #ifdef UW
 extern struct semaphore *no_proc_sem;
+
+volatile pid_t PID_count;
+struct lock *PID_lock;
 #endif // UW
 
 /* Call once during system startup to allocate data structures. */

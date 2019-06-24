@@ -66,7 +66,8 @@ static volatile unsigned int proc_count;
 /* it would be better to use a lock here, but we use a semaphore because locks are not implemented in the base kernel */ 
 static struct semaphore *proc_count_mutex;
 /* used to signal the kernel menu thread when there are no processes */
-struct semaphore *no_proc_sem;   
+struct semaphore *no_proc_sem; 
+
 #endif  // UW
 
 
@@ -167,6 +168,9 @@ proc_destroy(struct proc *proc)
 	spinlock_cleanup(&proc->p_lock);
 
 	kfree(proc->p_name);
+	// array_destroy(proc->childern);
+	// lock_destroy(proc->proc_lock);
+	// cv_destroy(proc->proc_cv);
 	kfree(proc);
 
 #ifdef UW
@@ -207,7 +211,10 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
-#endif // UW 
+
+#endif // UW
+  PID_count = 1;
+  PID_lock = lock_create("pid_lock");  
 }
 
 /*
@@ -242,6 +249,17 @@ proc_create_runprogram(const char *name)
 	/* VM fields */
 
 	proc->p_addrspace = NULL;
+	proc->proc_lock = lock_create("proc_lock");
+	proc->parent = curthread->t_proc;
+	proc->childern = array_create();
+
+	lock_acquire(PID_lock);
+	proc->exit_code = 123456789;
+	proc->dead = false;
+  	PID_count++;
+  	proc->PID = PID_count;
+  	lock_release(PID_lock);
+
 
 	/* VFS fields */
 
