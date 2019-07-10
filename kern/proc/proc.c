@@ -167,11 +167,25 @@ proc_destroy(struct proc *proc)
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
 
+	//lock_acquire(proc->proc_lock);
+	for( unsigned i=0; i < array_num(proc->childern) ; i++){
+		struct proc *child_process = array_get(proc->childern, i);
+		if (child_process != NULL){
+			lock_acquire(child_process->proc_lock);
+			child_process->parent = NULL;
+			lock_release(child_process->proc_lock);
+		}
+
+  	}
+	//lock_release(proc->proc_lock);
+
 	kfree(proc->p_name);
-	// array_destroy(proc->childern);
-	// lock_destroy(proc->proc_lock);
-	// cv_destroy(proc->proc_cv);
+	array_setsize(proc->childern, 0);
+	array_destroy(proc->childern);
+	lock_destroy(proc->proc_lock);
+	cv_destroy(proc->proc_cv);
 	kfree(proc);
+	proc = NULL;
 
 #ifdef UW
 	/* decrement the process count */
@@ -250,7 +264,8 @@ proc_create_runprogram(const char *name)
 
 	proc->p_addrspace = NULL;
 	proc->proc_lock = lock_create("proc_lock");
-	proc->parent = curthread->t_proc;
+	proc->proc_cv = cv_create("proc_cv");
+	proc->parent = NULL;
 	proc->childern = array_create();
 
 	lock_acquire(PID_lock);

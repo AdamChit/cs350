@@ -1,6 +1,7 @@
 #include <types.h>
 #include <kern/errno.h>
 #include <kern/unistd.h>
+#include <kern/fcntl.h>
 #include <kern/errno.h>
 #include <kern/wait.h>
 #include <lib.h>
@@ -11,7 +12,10 @@
 #include <addrspace.h>
 #include <copyinout.h>
 #include <synch.h>
+#include <vfs.h>
+#include <vm.h>
 #include "opt-A2.h"
+#include <test.h>
 #include <machine/trapframe.h>
 #include <array.h>
 
@@ -47,29 +51,34 @@ void sys__exit(int exitcode) {
   /* note: curproc cannot be used after this call */
   proc_remthread(curthread);
 
-  // lock_acquire(curproc->proc_lock);
-  // // set the process as dead
-  // curproc->dead = true;
-  // // save the return code + status
-  // curproc->exit_code = _MKWAIT_EXIT(exitcode);
-  // // wake up any process waiting for the current process to exit
-  // cv_signal(curproc->proc_cv,curproc->proc_lock);
-  // // destroy any of the current process's dead childern
-  // for( unsigned i=0; i < array_num(curproc->childern); i++){
-  //   struct proc *child_process = array_get(curproc->childern, i);
-  //   if(child_process->dead){
-  //     proc_destroy(child_process);
-  //   }
-  // }
-  // // destroy the current process if parent is dead
-  // if(curproc->parent == NULL){
-  //   lock_release(curproc->proc_lock);
-  //   proc_destroy(curproc);
-  // }
+  lock_acquire(p->proc_lock);
+  // set the process as dead
+  p->dead = true;
+  // save the return code + status
+  p->exit_code = _MKWAIT_EXIT(exitcode);
+  // wake up any process waiting for the current process to exit
+  cv_broadcast(p->proc_cv,p->proc_lock);
+  // destroy any of the current process's dead childern
+  for( unsigned i=array_num(p->childern); i >0; i--){
+    struct proc *child_process = array_get(p->childern, i - 1);
+    if(child_process->dead){
+      proc_destroy(child_process);
+      array_remove(p->childern,i  - 1);
+      //child_process = NULL;
+    }
+  }
+  // destroy the current process if parent is dead
+  if(p->parent == NULL){
+    lock_release(p->proc_lock);
+    proc_destroy(p);
+  }else{
+    lock_release(p->proc_lock);
+  }
 
   /* if this is the last user process in the system, proc_destroy()
      will wake up the kernel menu thread */
-  proc_destroy(p);
+
+  //proc_destroy(p);
   
   thread_exit();
   /* thread_exit() does not return, so we should never get here */
@@ -110,35 +119,28 @@ sys_waitpid(pid_t pid,
   if (options != 0) {
     return(EINVAL);
   }
-  struct proc *found_child_process;
+
   lock_acquire(curproc->proc_lock);
+  
   for( unsigned i=0; i < array_num(curproc->childern) ; i++){
     struct proc *child_process = array_get(curproc->childern, i);
+    
     lock_acquire(child_process->proc_lock);
     if(child_process->PID == pid){
-      found_child_process = child_process;
+      //lock_acquire(child_process->proc_lock);
+      while(!child_process->dead){
+        cv_wait(child_process->proc_cv,child_process->proc_lock);
+      }
+      exitstatus = child_process->exit_code;
+
+      lock_release(child_process->proc_lock);
+      break;
     }
     lock_release(child_process->proc_lock);
   }
+
   lock_release(curproc->proc_lock);
-  lock_acquire(found_child_process->proc_lock);
-  if (found_child_process == NULL){
-    return ENOMEM;
-  }
-  if (found_child_process->dead){
-    exitstatus = found_child_process->exit_code;
-    lock_release(found_child_process->proc_lock);
-    proc_destroy(found_child_process);
-  }
-  else {
-    cv_wait(found_child_process->proc_cv,found_child_process->proc_lock);
-    exitstatus = found_child_process->exit_code;
-    lock_release(found_child_process->proc_lock);
-    proc_destroy(found_child_process);
-  }
   
-  /* for now, just pretend the exitstatus is 0 */
- // exitstatus = 0;
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {
     return(result);
@@ -166,20 +168,20 @@ int sys_fork(struct trapframe *tf,pid_t *retval){
     return ENOMEM;
   }
 
+  spinlock_acquire(&new_child_proc->p_lock);
   // create address space for new child process
-  struct addrspace **new_address_space;
-  int ret = as_copy(curproc_getas(), new_address_space);
+  //struct addrspace **new_address_space;
+  int ret = as_copy(curproc_getas(), &(new_child_proc->p_addrspace));
   if (ret == ENOMEM){
     return ENOMEM;
   }
-
   // set the new address space to child processs
-  spinlock_acquire(&new_child_proc->p_lock);
-	new_child_proc->p_addrspace = *new_address_space;
+	//new_child_proc->p_addrspace = *new_address_space;
 	spinlock_release(&new_child_proc->p_lock);
 
   // add the child proccess to partens list of childern
   lock_acquire(curthread->t_proc->proc_lock);
+  new_child_proc->parent = curthread->t_proc;
   array_add(curthread->t_proc->childern, new_child_proc , NULL);
   lock_release(curthread->t_proc->proc_lock);
   
@@ -195,6 +197,81 @@ int sys_fork(struct trapframe *tf,pid_t *retval){
   return 0;
 }
 
+int
+sys_execv(userptr_t progname, userptr_t args)
+{
+  (void)args;
+  //char *progname;
+	struct addrspace *as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+	int result;
+  int num_args = 0;
 
+
+  // copy user program name into kernal
+  char *kern_progname = (char*) kmalloc(100*sizeof(char));
+  strcpy(kern_progname, (char*)progname);
+  // kprintf("string is: %s\n",kern_progname);
+  // kfree(kern_progname);
+  // return 0;
+
+
+  // count the number of args in the args list
+    char* ps = args;
+    while(*ps != '\0')
+    {
+        num_args++;
+        ps++;
+    }
+
+	
+  /* Open the file. */
+	result = vfs_open(kern_progname, O_RDONLY, 0, &v);
+	if (result) {
+		return result;
+	}
+
+	// /* We should be a new process. */
+	// KASSERT(curproc_getas() == NULL);
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as ==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	curproc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	/* Warp to user mode. */
+	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+			  stackptr, entrypoint);
+	
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+}
 #else
 #endif
+
