@@ -81,11 +81,12 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 	    case EX_IBE:
 	    case EX_DBE:
 	    case EX_SYS:
+		case EX_MOD:
+			sys__exit_readonly(EX_MOD);
 		/* should not be seen */
 		KASSERT(0);
 		sig = SIGABRT;
 		break;
-	    case EX_MOD:
 	    case EX_TLBL:
 	    case EX_TLBS:
 		sig = SIGSEGV;
@@ -106,6 +107,7 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 	    case EX_OVF:
 		sig = SIGFPE;
 		break;
+		 
 	}
 
 	/*

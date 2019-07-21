@@ -85,6 +85,67 @@ void sys__exit(int exitcode) {
   panic("return from thread_exit in sys_exit\n");
 }
 
+void sys__exit_readonly(int exitcode) {
+
+  struct addrspace *as;
+  struct proc *p = curproc;
+  /* for now, just include this to keep the compiler from complaining about
+     an unused variable */
+  (void)exitcode;
+
+  DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
+
+  KASSERT(curproc->p_addrspace != NULL);
+
+  as_deactivate();
+  /*
+   * clear p_addrspace before calling as_destroy. Otherwise if
+   * as_destroy sleeps (which is quite possible) when we
+   * come back we'll be calling as_activate on a
+   * half-destroyed address space. This tends to be
+   * messily fatal.
+   */
+  as = curproc_setas(NULL);
+  as_destroy(as);
+
+  /* detach this thread from its process */
+  /* note: curproc cannot be used after this call */
+  proc_remthread(curthread);
+
+  lock_acquire(p->proc_lock);
+  // set the process as dead
+  p->dead = true;
+  // save the return code + status
+  p->exit_code = exitcode;
+  // wake up any process waiting for the current process to exit
+  cv_broadcast(p->proc_cv,p->proc_lock);
+  // destroy any of the current process's dead childern
+  for( unsigned i=array_num(p->childern); i >0; i--){
+    struct proc *child_process = array_get(p->childern, i - 1);
+    if(child_process->dead){
+      proc_destroy(child_process);
+      array_remove(p->childern,i  - 1);
+      //child_process = NULL;
+    }
+  }
+  // destroy the current process if parent is dead
+  if(p->parent == NULL){
+    lock_release(p->proc_lock);
+    proc_destroy(p);
+  }else{
+    lock_release(p->proc_lock);
+  }
+
+  /* if this is the last user process in the system, proc_destroy()
+     will wake up the kernel menu thread */
+
+  //proc_destroy(p);
+  
+  thread_exit();
+  /* thread_exit() does not return, so we should never get here */
+  panic("return from thread_exit in sys_exit\n");
+}
+
 
 /* stub handler for getpid() system call                */
 int
@@ -206,34 +267,39 @@ sys_execv(userptr_t progname, userptr_t args)
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
+  char *kern_progname = (char*) kmalloc(256*sizeof(char));
+  struct addrspace *current_as = curproc->p_addrspace;
   int num_args = 0;
-
-
+  //struct array *copyed_args = array_create();
+  char *copyed_args[num_args+1];
   // copy user program name into kernal
-  char *kern_progname = (char*) kmalloc(100*sizeof(char));
   strcpy(kern_progname, (char*)progname);
-  // kprintf("string is: %s\n",kern_progname);
-  // kfree(kern_progname);
-  // return 0;
+  
+  // count number of args
+  while(((userptr_t *)args)[num_args])
+  {
+      num_args++;
+      // ps++;
+  }
 
+  // added null to show end of args
+  copyed_args[num_args] = NULL;
+  
+  // copy args into kern
+  for(int i = 0; i < num_args; i++){
+    //char* ps = (char *)((userptr_t *)args)[i];
+    size_t size_new_param = strlen(((char **)args)[i]) + 1;
+    //char *new_param = (char*) kmalloc(size_new_param*sizeof(char));
+    //alloc right to the element in the array
+    copyed_args[i] = kmalloc(size_new_param* sizeof(char));
+    copyinstr((const_userptr_t)((userptr_t *)args)[i], copyed_args[i], size_new_param, NULL);
+  }
 
-  // count the number of args in the args list
-    char* ps = args;
-    while(*ps != '\0')
-    {
-        num_args++;
-        ps++;
-    }
-
-	
   /* Open the file. */
 	result = vfs_open(kern_progname, O_RDONLY, 0, &v);
 	if (result) {
 		return result;
 	}
-
-	// /* We should be a new process. */
-	// KASSERT(curproc_getas() == NULL);
 
 	/* Create a new address space. */
 	as = as_create();
@@ -258,14 +324,16 @@ sys_execv(userptr_t progname, userptr_t args)
 	vfs_close(v);
 
 	/* Define the user stack in the address space */
-	result = as_define_stack(as, &stackptr);
+	result = as_define_stack_with_alignment(as, &stackptr,copyed_args, num_args);
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
-
+  //kprintf("the number of args is %d\n", num_args);
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+  //kill addrespace
+  as_destroy(current_as);
+	enter_new_process(num_args/*argc*/, (userptr_t)stackptr /*userspace addr of argv*/,
 			  stackptr, entrypoint);
 	
 	/* enter_new_process does not return. */

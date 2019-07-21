@@ -55,6 +55,7 @@ struct addrspace {
   paddr_t as_pbase2;
   size_t as_npages2;
   paddr_t as_stackpbase;
+  int load_elf_is_done;
 };
 
 /*
@@ -107,7 +108,7 @@ int               as_define_region(struct addrspace *as,
 int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
-
+int               as_define_stack_with_alignment(struct addrspace *as, vaddr_t *initstackptr,char **kern_args,int num_args);
 
 /*
  * Functions in loadelf.c

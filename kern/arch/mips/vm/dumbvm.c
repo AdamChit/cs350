@@ -36,7 +36,11 @@
 #include <current.h>
 #include <mips/tlb.h>
 #include <addrspace.h>
+#include <mips/trapframe.h>
 #include <vm.h>
+#include <array.h>
+#include <copyinout.h>
+
 
 /*
  * Dumb MIPS-only "VM system" that is intended to only be just barely
@@ -50,11 +54,14 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
-
+// int vm_bootstrap_finished = 0;
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	// paddr_t lo = 0;
+	// paddr_t hi = 0;
+	// ram_getsize(&lo, &hi);
+	// vm_bootstrap_finished = 1;
 }
 
 static
@@ -107,6 +114,7 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
+	int code_seg = 0;
 	vaddr_t vbase1, vtop1, vbase2, vtop2, stackbase, stacktop;
 	paddr_t paddr;
 	int i;
@@ -120,10 +128,14 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
+			//kprintf("dumbvm: VM_FAULT_READONLY\n");
+			return EX_MOD;
 		/* We always create pages read-write, so we can't get this */
-		panic("dumbvm: got VM_FAULT_READONLY\n");
+		//panic("dumbvm: got VM_FAULT_READONLY\n");
 	    case VM_FAULT_READ:
+		//kprintf("dumbvm: VM_FAULT_READ\n");
 	    case VM_FAULT_WRITE:
+		//kprintf("dumbvm: VM_FAULT_WRITE\n");
 		break;
 	    default:
 		return EINVAL;
@@ -170,6 +182,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	if (faultaddress >= vbase1 && faultaddress < vtop1) {
 		paddr = (faultaddress - vbase1) + as->as_pbase1;
+		code_seg = 1;
 	}
 	else if (faultaddress >= vbase2 && faultaddress < vtop2) {
 		paddr = (faultaddress - vbase2) + as->as_pbase2;
@@ -194,15 +207,25 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+
+		if (code_seg && as->load_elf_is_done){
+			elo &= ~TLBLO_DIRTY;
+		}
+
+
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
 		return 0;
 	}
 
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	ehi = faultaddress;
+	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+	//DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
+	tlb_random(ehi, elo);
+	//kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
 	splx(spl);
-	return EFAULT;
+	return 0;
 }
 
 struct addrspace *
@@ -213,6 +236,7 @@ as_create(void)
 		return NULL;
 	}
 
+	as->load_elf_is_done = 0;
 	as->as_vbase1 = 0;
 	as->as_pbase1 = 0;
 	as->as_npages1 = 0;
@@ -348,6 +372,41 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 	KASSERT(as->as_stackpbase != 0);
 
 	*stackptr = USERSTACK;
+	return 0;
+}
+
+int
+as_define_stack_with_alignment(struct addrspace *as, vaddr_t *stackptr,char **copyed_args,int num_args)
+{
+	KASSERT(as->as_stackpbase != 0);
+	// int num_args = 0;
+	char *user_args[num_args+1];
+	vaddr_t cur_stack_top = USERSTACK;
+	//
+	// // count number of args
+	// while(copyed_args[num_args]) {
+	// 	num_args++;
+	// }
+	// kprintf("numeber of params %d\n",num_args);
+	// added null to show end of args
+	user_args[num_args] = NULL;
+
+	// add args to the stack
+	for (int i = 0; i < num_args; i++) {
+		char *param =  copyed_args[i];
+		size_t param_size = strlen(param) + 1;
+		// round up for padding
+		cur_stack_top -= ROUNDUP(param_size,4);
+		user_args[i] = (char *)cur_stack_top;
+		copyoutstr(param, (userptr_t)cur_stack_top, param_size, NULL);
+	}
+	//add one to num_args because of null at the end 
+	num_args++;
+	int byte_size_of_user_args = 4 * num_args;
+	int address_of_user_args = ROUNDUP(byte_size_of_user_args, 4);
+	cur_stack_top -= address_of_user_args;
+	copyout(user_args, (userptr_t)cur_stack_top,byte_size_of_user_args);
+	*stackptr = cur_stack_top;
 	return 0;
 }
 
